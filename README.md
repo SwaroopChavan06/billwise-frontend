@@ -28,15 +28,21 @@ The current interface is an operational billing dashboard focused on:
 - Recent invoices
 - Customers, products, inventory, and invoice navigation
 
-Backend API integration will be added as the business workflows are finalized.
+Invoice creation, customer lookup, product lookup, invoice listing, and PDF
+downloads are connected to the backend API.
 
 ## Backend API connection
 
-The invoice modal sends a draft to:
+The invoice modal creates and issues an invoice through:
 
 ```text
-POST http://localhost:3000/api/v1/invoices/drafts
+POST http://localhost:3000/api/v1/invoices
 ```
+
+Invoice creation now submits to `POST /api/v1/invoices`, which calculates and
+issues the invoice. The UI loads customers from `GET /api/v1/customers`,
+products from `GET /api/v1/products`, and downloads PDFs from
+`GET /api/v1/invoices/:id/pdf`.
 
 By default the frontend uses `http://localhost:3000`. To use another API
 origin, create `apps/web/.env.local`:
@@ -55,4 +61,18 @@ npm run start:dev
 ```powershell
 cd "E:\GG\Billing Project\apps\web"
 npm run dev
+```
+
+If port `3000` is already occupied, run the API on another port and point the
+frontend to it using `apps/web/.env.local`:
+
+```text
+VITE_API_URL=http://localhost:3100
+```
+
+In the backend terminal, set the API port before starting:
+
+```powershell
+$env:PORT=3100
+npm run start:dev
 ```

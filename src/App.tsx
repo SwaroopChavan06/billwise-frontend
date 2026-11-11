@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import './App.css'
 
 type Product = {
@@ -13,21 +13,27 @@ type Product = {
   quantityAvailable: number
 }
 
+type Customer = {
+  id: string
+  name: string
+  gstin?: string
+  phone: string
+  email: string
+  address: string
+  stateCode: string
+}
+
 type Invoice = {
   id: string
   invoiceNumber: string
   customerName: string
   issueDate: string
+  subtotal: number
+  cgst: number
+  sgst: number
+  igst: number
   total: number
-  status: string
-}
-
-type Customer = {
-  id: string
-  name: string
-  phone: string
-  stateCode: string
-  outstanding: number
+  status: 'DRAFT' | 'ISSUED'
 }
 
 type InvoiceLine = {
@@ -42,38 +48,54 @@ type InvoiceLine = {
 }
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-const emptyLine = (): InvoiceLine => ({ productId: '', description: '', hsnCode: '', unit: 'piece', quantity: '1', rate: '', discount: '0', gstRate: '18' })
-const initialInvoices: Invoice[] = [
-  { id: 'seed-42', invoiceNumber: 'INV/26-27/00042', customerName: 'Apex Architects', issueDate: '05 Nov 2026', total: 18560, status: 'Issued' },
-  { id: 'seed-41', invoiceNumber: 'INV/26-27/00041', customerName: 'Greenfield Events', issueDate: '04 Nov 2026', total: 9240, status: 'Issued' },
-  { id: 'seed-40', invoiceNumber: 'INV/26-27/00040', customerName: 'Northstar Retail', issueDate: '03 Nov 2026', total: 4375, status: 'Issued' },
-]
-const customers: Customer[] = [
-  { id: 'cust-1', name: 'Apex Architects', phone: '+91 98765 43210', stateCode: '27', outstanding: 18560 },
-  { id: 'cust-2', name: 'Greenfield Events', phone: '+91 98200 11223', stateCode: '27', outstanding: 9240 },
-  { id: 'cust-3', name: 'Northstar Retail', phone: '+91 98100 44556', stateCode: '29', outstanding: 4375 },
-]
+const emptyLine = (): InvoiceLine => ({ productId: '', description: '', hsnCode: '', unit: '', quantity: '1', rate: '', discount: '0', gstRate: '' })
+const navigation = ['Overview', 'Invoices', 'Customers', 'Products', 'Inventory']
 
 function App() {
   const [active, setActive] = useState('Overview')
   const [query, setQuery] = useState('')
-  const [invoices, setInvoices] = useState(initialInvoices)
+  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [todayLabel] = useState(() => new Date().toLocaleDateString('en-IN', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).toUpperCase())
+  const [loadError, setLoadError] = useState('')
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false)
-  const [customerName, setCustomerName] = useState('')
-  const [customerStateCode, setCustomerStateCode] = useState('27')
+  const [customerQuery, setCustomerQuery] = useState('')
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [branchStateCode, setBranchStateCode] = useState('27')
   const [lines, setLines] = useState<InvoiceLine[]>([emptyLine()])
+  const [productResults, setProductResults] = useState<Record<number, Product[]>>({})
   const [isSavingInvoice, setIsSavingInvoice] = useState(false)
   const [invoiceError, setInvoiceError] = useState('')
-  const [productResults, setProductResults] = useState<Record<number, Product[]>>({})
+
+  async function loadResource<T>(path: string): Promise<T> {
+    const response = await fetch(`${apiUrl}${path}`)
+    if (!response.ok) throw new Error(`Could not load ${path}. (${response.status})`)
+    return response.json() as Promise<T>
+  }
+
+  async function refreshInvoices() {
+    setInvoices(await loadResource<Invoice[]>('/api/v1/invoices'))
+  }
 
   useEffect(() => {
-    fetch(`${apiUrl}/api/v1/products`)
-      .then((response) => response.ok ? response.json() as Promise<Product[]> : Promise.reject(new Error('Products could not be loaded.')))
-      .then(setProducts)
-      .catch(() => setProducts([]))
+    Promise.all([
+      loadResource<Invoice[]>('/api/v1/invoices'),
+      loadResource<Customer[]>('/api/v1/customers'),
+      loadResource<Product[]>('/api/v1/products'),
+    ]).then(([invoiceData, customerData, productData]) => {
+      setInvoices(invoiceData)
+      setCustomers(customerData)
+      setProducts(productData)
+      setLoadError('')
+    }).catch((error: unknown) => {
+      setLoadError(error instanceof Error ? error.message : 'Could not load billing data.')
+    })
   }, [])
 
   const filteredInvoices = useMemo(
@@ -81,10 +103,20 @@ function App() {
     [invoices, query],
   )
 
+  const filteredCustomers = useMemo(
+    () => customers.filter((customer) => `${customer.name} ${customer.phone} ${customer.email}`.toLowerCase().includes(query.toLowerCase())),
+    [customers, query],
+  )
+
+  const filteredProducts = useMemo(
+    () => products.filter((product) => `${product.name} ${product.sku} ${product.hsnCode}`.toLowerCase().includes(query.toLowerCase())),
+    [products, query],
+  )
+
   function openInvoiceModal() {
     setInvoiceError('')
-    setCustomerName('')
-    setCustomerStateCode('27')
+    setCustomerQuery('')
+    setSelectedCustomer(null)
     setBranchStateCode('27')
     setLines([emptyLine()])
     setProductResults({})
@@ -92,13 +124,18 @@ function App() {
   }
 
   function updateLine(index: number, field: keyof InvoiceLine, value: string) {
-    setLines((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line))
+    setLines((current) => current.map((line, lineIndex) => lineIndex === index
+      ? { ...line, [field]: value, ...(field === 'description' ? { productId: '', hsnCode: '', unit: '', rate: '', gstRate: '' } : {}) }
+      : line))
   }
 
   function searchProducts(index: number, value: string) {
-    updateLine(index, 'description', value)
-    const matches = products.filter((product) => `${product.name} ${product.sku} ${product.hsnCode}`.toLowerCase().includes(value.toLowerCase()))
-    setProductResults((current) => ({ ...current, [index]: value.trim() ? matches : products }))
+    setLines((current) => current.map((line, lineIndex) => lineIndex === index
+      ? { ...line, description: value, productId: '', hsnCode: '', unit: '', rate: '', gstRate: '' }
+      : line))
+    const normalized = value.trim().toLowerCase()
+    const matches = products.filter((product) => `${product.name} ${product.sku} ${product.hsnCode}`.toLowerCase().includes(normalized))
+    setProductResults((current) => ({ ...current, [index]: normalized ? matches : products }))
   }
 
   function selectProduct(index: number, product: Product) {
@@ -114,39 +151,104 @@ function App() {
     setProductResults((current) => ({ ...current, [index]: [] }))
   }
 
+  const invoicePreview = lines.reduce((sum, line) => {
+    const quantity = Number(line.quantity)
+    const rate = Number(line.rate)
+    const discount = Number(line.discount)
+    const gstRate = Number(line.gstRate)
+    const taxable = Math.max(0, quantity * rate - discount)
+    const tax = taxable * gstRate / 100
+    return {
+      subtotal: sum.subtotal + quantity * rate,
+      tax: sum.tax + tax,
+      total: sum.total + taxable + tax,
+    }
+  }, { subtotal: 0, tax: 0, total: 0 })
+
   async function createInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setInvoiceError('')
+    if (!selectedCustomer) {
+      setInvoiceError('Select a customer from the suggestions so their billing details can be included.')
+      return
+    }
+    if (lines.some((line) => !line.productId)) {
+      setInvoiceError('Select a product from the suggestions for every invoice item.')
+      return
+    }
+
     setIsSavingInvoice(true)
-    const id = `draft-${crypto.randomUUID()}`
+    const id = `invoice-${crypto.randomUUID()}`
     try {
-      const response = await fetch(`${apiUrl}/api/v1/invoices/drafts`, {
+      const response = await fetch(`${apiUrl}/api/v1/invoices`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id,
-          customerName: customerName.trim(),
-          customerStateCode,
+          customerId: selectedCustomer.id,
+          customerName: selectedCustomer.name,
+          customerPhone: selectedCustomer.phone,
+          customerEmail: selectedCustomer.email,
+          customerAddress: selectedCustomer.address,
+          customerGstin: selectedCustomer.gstin,
+          customerStateCode: selectedCustomer.stateCode,
           branchStateCode,
-          lines: lines.map((line) => ({ ...line, quantity: Number(line.quantity), rate: Number(line.rate), discount: Number(line.discount), gstRate: Number(line.gstRate) })),
+          lines: lines.map((line) => ({
+            productId: line.productId,
+            description: line.description,
+            hsnCode: line.hsnCode,
+            unit: line.unit,
+            quantity: Number(line.quantity),
+            rate: Number(line.rate),
+            discount: Number(line.discount),
+            gstRate: Number(line.gstRate),
+          })),
         }),
       })
-      if (!response.ok) throw new Error(await response.text() || 'The invoice could not be saved.')
-      setInvoices((current) => [{ id, invoiceNumber: 'Draft', customerName: customerName.trim(), issueDate: today, total: 0, status: 'Draft' }, ...current])
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new Error(errorBody || `Invoice could not be created (${response.status}).`)
+      }
+      const createdInvoice = await response.json() as Invoice
+      setInvoices((current) => [createdInvoice, ...current])
       setIsInvoiceModalOpen(false)
-      setActive('Overview')
+      setActive('Invoices')
     } catch (error) {
-      setInvoiceError(error instanceof Error ? error.message : 'The invoice could not be saved.')
+      setInvoiceError(error instanceof Error ? error.message : 'The invoice could not be created.')
     } finally {
       setIsSavingInvoice(false)
     }
   }
 
+  function renderInvoiceTable(records: Invoice[]) {
+    return <DataTable
+      headers={['Invoice number', 'Customer', 'Date', 'Subtotal', 'Total', 'Status', 'PDF']}
+      rows={records.map((invoice) => [
+        invoice.invoiceNumber || 'Draft',
+        invoice.customerName,
+        new Date(invoice.issueDate).toLocaleDateString('en-IN'),
+        currency(invoice.subtotal),
+        currency(invoice.total),
+        invoice.status,
+        <a className="download-button" href={`${apiUrl}/api/v1/invoices/${encodeURIComponent(invoice.id)}/pdf`} key={invoice.id}>Download</a>,
+      ])}
+    />
+  }
+
   function renderTable() {
-    if (active === 'Customers') return <DataTable headers={['Customer', 'Phone', 'State code', 'Outstanding']} rows={customers.map((customer) => [customer.name, customer.phone, customer.stateCode, `₹ ${customer.outstanding.toLocaleString('en-IN')}`])} />
-    if (active === 'Products') return <DataTable headers={['Product', 'SKU', 'HSN code', 'Unit', 'Selling price']} rows={products.map((product) => [product.name, product.sku, product.hsnCode, product.unit, `₹ ${product.sellingPrice.toLocaleString('en-IN')}`])} />
-    if (active === 'Inventory') return <DataTable headers={['Product', 'SKU', 'Unit', 'Quantity available', 'Stock status']} rows={products.map((product) => [product.name, product.sku, product.unit, String(product.quantityAvailable), product.quantityAvailable <= 12 ? 'Low stock' : 'In stock'])} />
-    return <DataTable headers={['Reference', 'Customer', 'Date', 'Amount', 'Status']} rows={filteredInvoices.map((invoice) => [invoice.invoiceNumber, invoice.customerName, invoice.issueDate, `₹ ${invoice.total.toLocaleString('en-IN')}`, invoice.status])} />
+    if (active === 'Customers') return <DataTable
+      headers={['Customer', 'Phone', 'Email', 'Address', 'State']}
+      rows={filteredCustomers.map((customer) => [customer.name, customer.phone, customer.email, customer.address, customer.stateCode])}
+    />
+    if (active === 'Products') return <DataTable
+      headers={['Product', 'SKU', 'HSN code', 'Unit', 'Selling price']}
+      rows={filteredProducts.map((product) => [product.name, product.sku, product.hsnCode, product.unit, currency(product.sellingPrice)])}
+    />
+    if (active === 'Inventory') return <DataTable
+      headers={['Product', 'SKU', 'Unit', 'Quantity available', 'Stock status']}
+      rows={filteredProducts.map((product) => [product.name, product.sku, product.unit, String(product.quantityAvailable), product.quantityAvailable <= 12 ? 'Low stock' : 'In stock'])}
+    />
+    return renderInvoiceTable(filteredInvoices)
   }
 
   return (
@@ -154,23 +256,42 @@ function App() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">B</span><span>Billwise</span></div>
         <div className="workspace"><span className="workspace-dot" /> Your business <span>⌄</span></div>
-        <nav>{['Overview', 'Invoices', 'Customers', 'Products', 'Inventory'].map((item) => <button className={active === item ? 'nav-item active' : 'nav-item'} key={item} onClick={() => setActive(item)}><span className="nav-icon">{item === 'Overview' ? '⌂' : item === 'Invoices' ? '▤' : item === 'Customers' ? '♙' : item === 'Products' ? '□' : '◫'}</span>{item}</button>)}</nav>
+        <nav>{navigation.map((item) => <button className={active === item ? 'nav-item active' : 'nav-item'} key={item} onClick={() => setActive(item)}><span className="nav-icon">{navigationIcon(item)}</span>{item}</button>)}</nav>
         <div className="sidebar-bottom"><button className="nav-item"><span className="nav-icon">⚙</span> Settings</button><div className="profile"><span className="avatar">AS</span><span><strong>Administrator</strong><small>Billing workspace</small></span><span>⋮</span></div></div>
       </aside>
       <main className="main-content">
         <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> {active}</div><div className="top-actions"><button className="icon-button">?</button><button className="icon-button">⌕</button><button className="notification">♢<i /></button></div></header>
         <div className="content">
-          <div className="page-heading"><div><p className="eyebrow">WEDNESDAY, 05 NOVEMBER 2026</p><h1>{active === 'Overview' ? 'Good morning' : active}</h1><p className="muted">{active === 'Overview' ? 'Here is what is happening with your business today.' : `Manage your ${active.toLowerCase()} in one place.`}</p></div><button className="primary-button" onClick={openInvoiceModal}>＋ Create invoice</button></div>
-          {active === 'Overview' ? <><section className="metrics"><article className="metric-card"><div className="metric-label">Outstanding <span className="warning">● 3 due soon</span></div><strong>₹ 68,420</strong><small>Across 12 invoices</small><div className="sparkline orange" /></article><article className="metric-card"><div className="metric-label">Invoices issued</div><strong>42</strong><small>This month</small><div className="sparkline blue" /></article><article className="metric-card"><div className="metric-label">Low stock items <span className="warning">● 4 to review</span></div><strong>8</strong><small>Across your inventory</small><div className="sparkline purple" /></article></section><section className="panel invoice-table overview-table"><div className="panel-heading"><div><h2>Invoices</h2><p className="muted">Latest invoices across your business</p></div><button className="text-button" onClick={() => setActive('Invoices')}>View all</button></div>{renderTable()}</section></> : <section className="panel invoice-table"><div className="panel-heading"><div><h2>{active} list</h2><p className="muted">Keep your records accurate and up to date.</p></div><div className="table-actions"><input placeholder="Search..." value={query} onChange={(event) => setQuery(event.target.value)} /><button className="secondary-button">Filter</button></div></div>{renderTable()}</section>}
+          <div className="page-heading"><div><p className="eyebrow">{todayLabel}</p><h1>{active === 'Overview' ? 'Good morning' : active}</h1><p className="muted">{active === 'Overview' ? 'Here is what is happening with your business today.' : `Manage your ${active.toLowerCase()} in one place.`}</p></div><button className="primary-button" onClick={openInvoiceModal}>＋ Create invoice</button></div>
+          {loadError && <p className="form-error" role="alert">Could not connect to the billing API: {loadError}</p>}
+          {active === 'Overview' ? <><section className="metrics"><article className="metric-card"><div className="metric-label">Invoiced total</div><strong>{currency(invoices.filter((invoice) => invoice.status === 'ISSUED').reduce((total, invoice) => total + invoice.total, 0))}</strong><small>Issued invoices total</small><div className="sparkline orange" /></article><article className="metric-card"><div className="metric-label">Invoices created</div><strong>{invoices.length}</strong><small>In this workspace</small><div className="sparkline blue" /></article><article className="metric-card"><div className="metric-label">Low stock products</div><strong>{products.filter((product) => product.quantityAvailable <= 12).length}</strong><small>Items to review</small><div className="sparkline purple" /></article></section><section className="panel invoice-table overview-table"><div className="panel-heading"><div><h2>Invoices</h2><p className="muted">Latest invoices across your business</p></div><button className="text-button" onClick={() => setActive('Invoices')}>View all</button></div>{renderInvoiceTable(invoices)}</section></> : <section className="panel invoice-table"><div className="panel-heading"><div><h2>{active} list</h2><p className="muted">Keep your records accurate and up to date.</p></div><div className="table-actions"><input placeholder={`Search ${active.toLowerCase()}...`} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="secondary-button" onClick={() => void refreshInvoices()} disabled={active !== 'Invoices'}>Refresh</button></div></div>{renderTable()}</section>}
         </div>
       </main>
-      {isInvoiceModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setIsInvoiceModalOpen(false)}><div className="invoice-modal" role="dialog" aria-modal="true" aria-labelledby="create-invoice-title"><div className="modal-heading"><div><p className="eyebrow">NEW BILLING DOCUMENT</p><h2 id="create-invoice-title">Create invoice</h2><p className="muted">Search products and add as many items as needed.</p></div><button className="close-button" type="button" onClick={() => setIsInvoiceModalOpen(false)} aria-label="Close">×</button></div><form onSubmit={createInvoice}><div className="form-section"><h3>Customer details</h3><div className="form-grid"><label>Customer name<input required value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="Apex Architects" /></label><label>Customer state code<input required pattern="[0-9]{2}" value={customerStateCode} onChange={(event) => setCustomerStateCode(event.target.value)} placeholder="27" /></label><label>Branch state code<input required pattern="[0-9]{2}" value={branchStateCode} onChange={(event) => setBranchStateCode(event.target.value)} placeholder="27" /></label></div></div><div className="form-section"><div className="line-items-heading"><h3>Items</h3><button className="text-button" type="button" onClick={() => setLines((current) => [...current, emptyLine()])}>＋ Add item</button></div>{lines.map((line, index) => <div className="line-item" key={index}><label className="product-search">Product<input required value={line.description} onChange={(event) => searchProducts(index, event.target.value)} placeholder="Search product by name, SKU or HSN" />{(productResults[index] ?? []).length > 0 && <div className="product-dropdown">{(productResults[index] ?? []).map((product) => <button type="button" key={product.id} onClick={() => selectProduct(index, product)}><strong>{product.name}</strong><small>{product.sku} · HSN {product.hsnCode} · ₹ {product.sellingPrice} / {product.unit}</small></button>)}</div>}</label><label>HSN<input required value={line.hsnCode} onChange={(event) => updateLine(index, 'hsnCode', event.target.value)} /></label><label>Unit<input required value={line.unit} onChange={(event) => updateLine(index, 'unit', event.target.value)} /></label><label>Qty<input required min="0.001" step="0.001" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label><label>Rate (₹)<input required min="0" step="0.01" type="number" value={line.rate} onChange={(event) => updateLine(index, 'rate', event.target.value)} /></label><label>GST %<input required min="0" step="0.01" type="number" value={line.gstRate} onChange={(event) => updateLine(index, 'gstRate', event.target.value)} /></label>{lines.length > 1 && <button className="remove-line" type="button" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}>Remove</button>}</div>)}</div>{invoiceError && <p className="form-error" role="alert">{invoiceError}</p>}<div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsInvoiceModalOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={isSavingInvoice}>{isSavingInvoice ? 'Saving…' : 'Save draft'}</button></div></form></div></div>}
+      {isInvoiceModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setIsInvoiceModalOpen(false)}><div className="invoice-modal" role="dialog" aria-modal="true" aria-labelledby="create-invoice-title"><div className="modal-heading"><div><p className="eyebrow">NEW BILLING DOCUMENT</p><h2 id="create-invoice-title">Create invoice</h2><p className="muted">Add up to 15 products. Prices and taxes are calculated by the API.</p></div><button className="close-button" type="button" onClick={() => setIsInvoiceModalOpen(false)} aria-label="Close">×</button></div><form onSubmit={createInvoice}>
+        <div className="form-section"><h3>Customer details</h3><div className="form-grid"><label className="customer-search">Search customer<input required value={customerQuery} onChange={(event) => { setCustomerQuery(event.target.value); setSelectedCustomer(null) }} placeholder="Name, phone or email" />{!selectedCustomer && customerQuery && <div className="product-dropdown">{customers.filter((customer) => `${customer.name} ${customer.phone} ${customer.email}`.toLowerCase().includes(customerQuery.toLowerCase())).map((customer) => <button type="button" key={customer.id} onClick={() => { setSelectedCustomer(customer); setCustomerQuery(customer.name) }}><strong>{customer.name}</strong><small>{customer.phone} · {customer.email}</small></button>)}</div>}</label><label>Branch state code<input required pattern="[0-9]{2}" value={branchStateCode} onChange={(event) => setBranchStateCode(event.target.value)} placeholder="27" /></label></div>{selectedCustomer && <div className="customer-summary"><strong>{selectedCustomer.name}</strong><span>{selectedCustomer.address}</span><span>{selectedCustomer.phone} · {selectedCustomer.email}</span>{selectedCustomer.gstin && <span>GSTIN: {selectedCustomer.gstin}</span>}<span>State code: {selectedCustomer.stateCode}</span></div>}</div>
+        <div className="form-section"><div className="line-items-heading"><h3>Items ({lines.length}/15)</h3><button className="text-button" type="button" disabled={lines.length >= 15} onClick={() => setLines((current) => [...current, emptyLine()])}>＋ Add item</button></div>{lines.map((line, index) => <div className="line-item" key={index}><label className="product-search">Product<input required value={line.description} onChange={(event) => searchProducts(index, event.target.value)} placeholder="Search product by name, SKU or HSN" />{(productResults[index] ?? []).length > 0 && <div className="product-dropdown">{(productResults[index] ?? []).slice(0, 8).map((product) => <button type="button" key={product.id} onClick={() => selectProduct(index, product)}><strong>{product.name}</strong><small>{product.sku} · HSN {product.hsnCode} · {currency(product.sellingPrice)} / {product.unit}</small></button>)}</div>}</label><label>HSN<input required readOnly value={line.hsnCode} /></label><label>Unit<input required readOnly value={line.unit} /></label><label>Qty<input required min="0.001" step="0.001" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label><label>Rate<input required readOnly value={line.rate ? currency(Number(line.rate)) : ''} /></label><label>GST %<input required readOnly value={line.gstRate} /></label><label>Discount<input min="0" step="0.01" type="number" value={line.discount} onChange={(event) => updateLine(index, 'discount', event.target.value)} /></label>{lines.length > 1 && <button className="remove-line" type="button" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}>Remove</button>}</div>)}</div>
+        <div className="invoice-preview"><span>Subtotal <strong>{currency(invoicePreview.subtotal)}</strong></span><span>Estimated tax <strong>{currency(invoicePreview.tax)}</strong></span><span>Total <strong>{currency(invoicePreview.total)}</strong></span></div>
+        {invoiceError && <p className="form-error" role="alert">{invoiceError}</p>}
+        <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsInvoiceModalOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={isSavingInvoice || !products.length || !customers.length}>{isSavingInvoice ? 'Creating…' : 'Create invoice'}</button></div>
+      </form></div></div>}
     </div>
   )
 }
 
-function DataTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
-  return <table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}><strong className={cellIndex === 0 ? 'table-primary' : undefined}>{cell}</strong></td>)}</tr>) : <tr><td className="empty-table" colSpan={headers.length}>No records found.</td></tr>}</tbody></table>
+function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }) {
+  return <table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{cellIndex === 0 && typeof cell === 'string' ? <strong>{cell}</strong> : cell}</td>)}</tr>) : <tr><td className="empty-table" colSpan={headers.length}>No records found.</td></tr>}</tbody></table>
+}
+
+function currency(amount: number): string {
+  return `₹ ${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function navigationIcon(item: string): string {
+  if (item === 'Overview') return '⌂'
+  if (item === 'Invoices') return '▤'
+  if (item === 'Customers') return '♙'
+  if (item === 'Products') return '□'
+  return '◫'
 }
 
 export default App
