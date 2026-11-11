@@ -230,7 +230,7 @@ function App() {
         currency(invoice.subtotal),
         currency(invoice.total),
         invoice.status,
-        <a className="download-button" href={`${apiUrl}/api/v1/invoices/${encodeURIComponent(invoice.id)}/pdf`} key={invoice.id}>Download</a>,
+        <a className="download-button" href={`${apiUrl}/api/v1/invoices/${encodeURIComponent(invoice.id)}/print`} key={invoice.id} target="_blank" rel="noreferrer">Print / Save PDF</a>,
       ])}
     />
   }
@@ -269,7 +269,32 @@ function App() {
       </main>
       {isInvoiceModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setIsInvoiceModalOpen(false)}><div className="invoice-modal" role="dialog" aria-modal="true" aria-labelledby="create-invoice-title"><div className="modal-heading"><div><p className="eyebrow">NEW BILLING DOCUMENT</p><h2 id="create-invoice-title">Create invoice</h2><p className="muted">Add up to 15 products. Prices and taxes are calculated by the API.</p></div><button className="close-button" type="button" onClick={() => setIsInvoiceModalOpen(false)} aria-label="Close">×</button></div><form onSubmit={createInvoice}>
         <div className="form-section"><h3>Customer details</h3><div className="form-grid"><label className="customer-search">Search customer<input required value={customerQuery} onChange={(event) => { setCustomerQuery(event.target.value); setSelectedCustomer(null) }} placeholder="Name, phone or email" />{!selectedCustomer && customerQuery && <div className="product-dropdown">{customers.filter((customer) => `${customer.name} ${customer.phone} ${customer.email}`.toLowerCase().includes(customerQuery.toLowerCase())).map((customer) => <button type="button" key={customer.id} onClick={() => { setSelectedCustomer(customer); setCustomerQuery(customer.name) }}><strong>{customer.name}</strong><small>{customer.phone} · {customer.email}</small></button>)}</div>}</label><label>Branch state code<input required pattern="[0-9]{2}" value={branchStateCode} onChange={(event) => setBranchStateCode(event.target.value)} placeholder="27" /></label></div>{selectedCustomer && <div className="customer-summary"><strong>{selectedCustomer.name}</strong><span>{selectedCustomer.address}</span><span>{selectedCustomer.phone} · {selectedCustomer.email}</span>{selectedCustomer.gstin && <span>GSTIN: {selectedCustomer.gstin}</span>}<span>State code: {selectedCustomer.stateCode}</span></div>}</div>
-        <div className="form-section"><div className="line-items-heading"><h3>Items ({lines.length}/15)</h3><button className="text-button" type="button" disabled={lines.length >= 15} onClick={() => setLines((current) => [...current, emptyLine()])}>＋ Add item</button></div>{lines.map((line, index) => <div className="line-item" key={index}><label className="product-search">Product<input required value={line.description} onChange={(event) => searchProducts(index, event.target.value)} placeholder="Search product by name, SKU or HSN" />{(productResults[index] ?? []).length > 0 && <div className="product-dropdown">{(productResults[index] ?? []).slice(0, 8).map((product) => <button type="button" key={product.id} onClick={() => selectProduct(index, product)}><strong>{product.name}</strong><small>{product.sku} · HSN {product.hsnCode} · {currency(product.sellingPrice)} / {product.unit}</small></button>)}</div>}</label><label>HSN<input required readOnly value={line.hsnCode} /></label><label>Unit<input required readOnly value={line.unit} /></label><label>Qty<input required min="0.001" step="0.001" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label><label>Rate<input required readOnly value={line.rate ? currency(Number(line.rate)) : ''} /></label><label>GST %<input required readOnly value={line.gstRate} /></label><label>Discount<input min="0" step="0.01" type="number" value={line.discount} onChange={(event) => updateLine(index, 'discount', event.target.value)} /></label>{lines.length > 1 && <button className="remove-line" type="button" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}>Remove</button>}</div>)}</div>
+        <div className="form-section">
+          <div className="line-items-heading"><h3>Items ({lines.length}/15)</h3></div>
+          <div className="invoice-items-scroll">
+            <table className="invoice-items">
+              <thead><tr><th>Product / description</th><th>HSN</th><th>Unit</th><th>Quantity</th><th>Rate (₹)</th><th>GST %</th><th>Discount (₹)</th><th>Line total (₹)</th><th></th></tr></thead>
+              <tbody>
+                {lines.map((line, index) => {
+                  const taxable = Math.max(0, Number(line.quantity) * Number(line.rate) - Number(line.discount))
+                  const lineTotal = taxable * Number(line.gstRate) / 100 + taxable
+                  return <tr key={index}>
+                    <td><label className="product-search"><span className="visually-hidden">Product</span><input required value={line.description} onChange={(event) => searchProducts(index, event.target.value)} placeholder="Search product" />{(productResults[index] ?? []).length > 0 && <div className="product-dropdown">{(productResults[index] ?? []).slice(0, 8).map((product) => <button type="button" key={product.id} onClick={() => selectProduct(index, product)}><strong>{product.name}</strong><small>{product.sku} · HSN {product.hsnCode} · {currency(product.sellingPrice)} / {product.unit}</small></button>)}</div>}</label></td>
+                    <td><input aria-label={`HSN for item ${index + 1}`} required readOnly value={line.hsnCode} /></td>
+                    <td><input aria-label={`Unit for item ${index + 1}`} required readOnly value={line.unit} /></td>
+                    <td><input aria-label={`Quantity for item ${index + 1}`} required min="0.001" step="0.001" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></td>
+                    <td><input aria-label={`Rate for item ${index + 1}`} required readOnly value={line.rate ? Number(line.rate).toFixed(2) : ''} /></td>
+                    <td><input aria-label={`GST rate for item ${index + 1}`} required readOnly value={line.gstRate} /></td>
+                    <td><input aria-label={`Discount for item ${index + 1}`} min="0" step="0.01" type="number" value={line.discount} onChange={(event) => updateLine(index, 'discount', event.target.value)} /></td>
+                    <td className="line-total">{currency(lineTotal)}</td>
+                    <td>{lines.length > 1 && <button className="remove-line" aria-label={`Remove item ${index + 1}`} type="button" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}>×</button>}</td>
+                  </tr>
+                })}
+              </tbody>
+            </table>
+          </div>
+          <button className="add-item-button" type="button" disabled={lines.length >= 15} onClick={() => setLines((current) => [...current, emptyLine()])}>＋ Add item ({lines.length}/15)</button>
+        </div>
         <div className="invoice-preview"><span>Subtotal <strong>{currency(invoicePreview.subtotal)}</strong></span><span>Estimated tax <strong>{currency(invoicePreview.tax)}</strong></span><span>Total <strong>{currency(invoicePreview.total)}</strong></span></div>
         {invoiceError && <p className="form-error" role="alert">{invoiceError}</p>}
         <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsInvoiceModalOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={isSavingInvoice || !products.length || !customers.length}>{isSavingInvoice ? 'Creating…' : 'Create invoice'}</button></div>

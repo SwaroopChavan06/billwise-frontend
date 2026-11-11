@@ -41,8 +41,9 @@ POST http://localhost:3000/api/v1/invoices
 
 Invoice creation now submits to `POST /api/v1/invoices`, which calculates and
 issues the invoice. The UI loads customers from `GET /api/v1/customers`,
-products from `GET /api/v1/products`, and downloads PDFs from
-`GET /api/v1/invoices/:id/pdf`.
+products from `GET /api/v1/products`, and print-ready invoice HTML from
+`GET /api/v1/invoices/:id/print`. Use the invoice page's **Print / Save as PDF**
+button to save the formatted invoice as a PDF.
 
 By default the frontend uses `http://localhost:3000`. To use another API
 origin, create `apps/web/.env.local`:
