@@ -25,6 +25,7 @@ type Customer = {
 
 type Invoice = {
   id: string
+  customerId?: string
   invoiceNumber: string
   customerName: string
   issueDate: string
@@ -47,8 +48,18 @@ type InvoiceLine = {
   gstRate: string
 }
 
+type CustomerForm = {
+  name: string
+  phone: string
+  email: string
+  address: string
+  stateCode: string
+  gstin: string
+}
+
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const emptyLine = (): InvoiceLine => ({ productId: '', description: '', hsnCode: '', unit: '', quantity: '1', rate: '', discount: '0', gstRate: '' })
+const emptyCustomerForm: CustomerForm = { name: '', phone: '', email: '', address: '', stateCode: '27', gstin: '' }
 const navigation = ['Overview', 'Invoices', 'Customers', 'Products', 'Inventory']
 
 function App() {
@@ -65,6 +76,11 @@ function App() {
   }).toUpperCase())
   const [loadError, setLoadError] = useState('')
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false)
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false)
+  const [customerForm, setCustomerForm] = useState(emptyCustomerForm)
+  const [customerError, setCustomerError] = useState('')
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false)
+  const [selectedInvoiceCustomer, setSelectedInvoiceCustomer] = useState<Customer | null>(null)
   const [customerQuery, setCustomerQuery] = useState('')
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [branchStateCode, setBranchStateCode] = useState('27')
@@ -99,8 +115,10 @@ function App() {
   }, [])
 
   const filteredInvoices = useMemo(
-    () => invoices.filter((invoice) => `${invoice.invoiceNumber} ${invoice.customerName}`.toLowerCase().includes(query.toLowerCase())),
-    [invoices, query],
+    () => invoices.filter((invoice) =>
+      (!selectedInvoiceCustomer || invoice.customerId === selectedInvoiceCustomer.id) &&
+      `${invoice.invoiceNumber} ${invoice.customerName}`.toLowerCase().includes(query.toLowerCase())),
+    [invoices, query, selectedInvoiceCustomer],
   )
 
   const filteredCustomers = useMemo(
@@ -121,6 +139,46 @@ function App() {
     setLines([emptyLine()])
     setProductResults({})
     setIsInvoiceModalOpen(true)
+  }
+
+  async function createCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setCustomerError('')
+    setIsSavingCustomer(true)
+    try {
+      const response = await fetch(`${apiUrl}/api/v1/customers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...customerForm,
+          name: customerForm.name.trim(),
+          phone: customerForm.phone.trim(),
+          email: customerForm.email.trim(),
+          address: customerForm.address.trim(),
+          gstin: customerForm.gstin.trim() || undefined,
+        }),
+      })
+      if (!response.ok) throw new Error(await response.text() || `Customer could not be created (${response.status}).`)
+      const createdCustomer = await response.json() as Customer
+      setCustomers((current) => [...current, createdCustomer])
+      setCustomerForm(emptyCustomerForm)
+      setIsCustomerModalOpen(false)
+    } catch (error) {
+      setCustomerError(error instanceof Error ? error.message : 'The customer could not be created.')
+    } finally {
+      setIsSavingCustomer(false)
+    }
+  }
+
+  function showCustomerInvoices(customer: Customer) {
+    setSelectedInvoiceCustomer(customer)
+    setQuery('')
+    setActive('Invoices')
+  }
+
+  function showAllInvoices() {
+    setSelectedInvoiceCustomer(null)
+    setQuery('')
   }
 
   function updateLine(index: number, field: keyof InvoiceLine, value: string) {
@@ -237,8 +295,13 @@ function App() {
 
   function renderTable() {
     if (active === 'Customers') return <DataTable
-      headers={['Customer', 'Phone', 'Email', 'Address', 'State']}
-      rows={filteredCustomers.map((customer) => [customer.name, customer.phone, customer.email, customer.address, customer.stateCode])}
+      headers={['Customer', 'Phone', 'Address', 'Invoices']}
+      rows={filteredCustomers.map((customer) => [
+        customer.name,
+        customer.phone,
+        customer.address,
+        <button className="text-button customer-invoices-button" key={customer.id} onClick={() => showCustomerInvoices(customer)}>View invoices</button>,
+      ])}
     />
     if (active === 'Products') return <DataTable
       headers={['Product', 'SKU', 'HSN code', 'Unit', 'Selling price']}
@@ -262,9 +325,9 @@ function App() {
       <main className="main-content">
         <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> {active}</div><div className="top-actions"><button className="icon-button">?</button><button className="icon-button">⌕</button><button className="notification">♢<i /></button></div></header>
         <div className="content">
-          <div className="page-heading"><div><p className="eyebrow">{todayLabel}</p><h1>{active === 'Overview' ? 'Good morning' : active}</h1><p className="muted">{active === 'Overview' ? 'Here is what is happening with your business today.' : `Manage your ${active.toLowerCase()} in one place.`}</p></div><button className="primary-button" onClick={openInvoiceModal}>＋ Create invoice</button></div>
+          <div className="page-heading"><div><p className="eyebrow">{todayLabel}</p><h1>{active === 'Overview' ? 'Good morning' : active}</h1><p className="muted">{active === 'Overview' ? 'Here is what is happening with your business today.' : selectedInvoiceCustomer && active === 'Invoices' ? `Invoices for ${selectedInvoiceCustomer.name}` : `Manage your ${active.toLowerCase()} in one place.`}</p></div>{active === 'Customers' ? <button className="primary-button" onClick={() => { setCustomerError(''); setCustomerForm(emptyCustomerForm); setIsCustomerModalOpen(true) }}>＋ Create customer</button> : <button className="primary-button" onClick={openInvoiceModal}>＋ Create invoice</button>}</div>
           {loadError && <p className="form-error" role="alert">Could not connect to the billing API: {loadError}</p>}
-          {active === 'Overview' ? <><section className="metrics"><article className="metric-card"><div className="metric-label">Invoiced total</div><strong>{currency(invoices.filter((invoice) => invoice.status === 'ISSUED').reduce((total, invoice) => total + invoice.total, 0))}</strong><small>Issued invoices total</small><div className="sparkline orange" /></article><article className="metric-card"><div className="metric-label">Invoices created</div><strong>{invoices.length}</strong><small>In this workspace</small><div className="sparkline blue" /></article><article className="metric-card"><div className="metric-label">Low stock products</div><strong>{products.filter((product) => product.quantityAvailable <= 12).length}</strong><small>Items to review</small><div className="sparkline purple" /></article></section><section className="panel invoice-table overview-table"><div className="panel-heading"><div><h2>Invoices</h2><p className="muted">Latest invoices across your business</p></div><button className="text-button" onClick={() => setActive('Invoices')}>View all</button></div>{renderInvoiceTable(invoices)}</section></> : <section className="panel invoice-table"><div className="panel-heading"><div><h2>{active} list</h2><p className="muted">Keep your records accurate and up to date.</p></div><div className="table-actions"><input placeholder={`Search ${active.toLowerCase()}...`} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="secondary-button" onClick={() => void refreshInvoices()} disabled={active !== 'Invoices'}>Refresh</button></div></div>{renderTable()}</section>}
+          {active === 'Overview' ? <><section className="metrics"><article className="metric-card"><div className="metric-label">Invoiced total</div><strong>{currency(invoices.filter((invoice) => invoice.status === 'ISSUED').reduce((total, invoice) => total + invoice.total, 0))}</strong><small>Issued invoices total</small><div className="sparkline orange" /></article><article className="metric-card"><div className="metric-label">Invoices created</div><strong>{invoices.length}</strong><small>In this workspace</small><div className="sparkline blue" /></article><article className="metric-card"><div className="metric-label">Low stock products</div><strong>{products.filter((product) => product.quantityAvailable <= 12).length}</strong><small>Items to review</small><div className="sparkline purple" /></article></section><section className="panel invoice-table overview-table"><div className="panel-heading"><div><h2>Invoices</h2><p className="muted">Latest invoices across your business</p></div><button className="text-button" onClick={() => { setSelectedInvoiceCustomer(null); setActive('Invoices') }}>View all</button></div>{renderInvoiceTable(invoices)}</section></> : <section className="panel invoice-table"><div className="panel-heading"><div><h2>{selectedInvoiceCustomer && active === 'Invoices' ? `Invoices — ${selectedInvoiceCustomer.name}` : `${active} list`}</h2><p className="muted">{selectedInvoiceCustomer && active === 'Invoices' ? 'Invoices linked to this customer.' : 'Keep your records accurate and up to date.'}</p></div><div className="table-actions">{active === 'Invoices' && selectedInvoiceCustomer && <button className="secondary-button" onClick={showAllInvoices}>All invoices</button>}<input placeholder={`Search ${active.toLowerCase()}...`} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="secondary-button" onClick={() => void refreshInvoices()} disabled={active !== 'Invoices'}>Refresh</button></div></div>{selectedInvoiceCustomer && active === 'Invoices' && filteredInvoices.length === 0 ? <p className="empty-table customer-empty">No invoices found for {selectedInvoiceCustomer.name}.</p> : renderTable()}</section>}
         </div>
       </main>
       {isInvoiceModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setIsInvoiceModalOpen(false)}><div className="invoice-modal" role="dialog" aria-modal="true" aria-labelledby="create-invoice-title"><div className="modal-heading"><div><p className="eyebrow">NEW BILLING DOCUMENT</p><h2 id="create-invoice-title">Create invoice</h2><p className="muted">Add up to 15 products. Prices and taxes are calculated by the API.</p></div><button className="close-button" type="button" onClick={() => setIsInvoiceModalOpen(false)} aria-label="Close">×</button></div><form onSubmit={createInvoice}>
@@ -282,7 +345,7 @@ function App() {
                     <td><label className="product-search"><span className="visually-hidden">Product</span><input required value={line.description} onChange={(event) => searchProducts(index, event.target.value)} placeholder="Search product" />{(productResults[index] ?? []).length > 0 && <div className="product-dropdown">{(productResults[index] ?? []).slice(0, 8).map((product) => <button type="button" key={product.id} onClick={() => selectProduct(index, product)}><strong>{product.name}</strong><small>{product.sku} · HSN {product.hsnCode} · {currency(product.sellingPrice)} / {product.unit}</small></button>)}</div>}</label></td>
                     <td><input aria-label={`HSN for item ${index + 1}`} required readOnly value={line.hsnCode} /></td>
                     <td><input aria-label={`Unit for item ${index + 1}`} required readOnly value={line.unit} /></td>
-                    <td><input aria-label={`Quantity for item ${index + 1}`} required min="0.001" step="0.001" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></td>
+                    <td><input aria-label={`Quantity for item ${index + 1}`} required min="1" step="1" type="number" value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></td>
                     <td><input aria-label={`Rate for item ${index + 1}`} required readOnly value={line.rate ? Number(line.rate).toFixed(2) : ''} /></td>
                     <td><input aria-label={`GST rate for item ${index + 1}`} required readOnly value={line.gstRate} /></td>
                     <td><input aria-label={`Discount for item ${index + 1}`} min="0" step="0.01" type="number" value={line.discount} onChange={(event) => updateLine(index, 'discount', event.target.value)} /></td>
@@ -299,6 +362,7 @@ function App() {
         {invoiceError && <p className="form-error" role="alert">{invoiceError}</p>}
         <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsInvoiceModalOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={isSavingInvoice || !products.length || !customers.length}>{isSavingInvoice ? 'Creating…' : 'Create invoice'}</button></div>
       </form></div></div>}
+      {isCustomerModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setIsCustomerModalOpen(false)}><div className="invoice-modal customer-modal" role="dialog" aria-modal="true" aria-labelledby="create-customer-title"><div className="modal-heading"><div><p className="eyebrow">CUSTOMER DIRECTORY</p><h2 id="create-customer-title">Create customer</h2><p className="muted">Add customer contact and billing details.</p></div><button className="close-button" type="button" onClick={() => setIsCustomerModalOpen(false)} aria-label="Close">×</button></div><form onSubmit={createCustomer}><div className="form-section"><div className="form-grid"><label>Customer name<input required value={customerForm.name} onChange={(event) => setCustomerForm((current) => ({ ...current, name: event.target.value }))} /></label><label>Phone number<input required type="tel" value={customerForm.phone} onChange={(event) => setCustomerForm((current) => ({ ...current, phone: event.target.value }))} /></label><label>Email address<input type="email" value={customerForm.email} onChange={(event) => setCustomerForm((current) => ({ ...current, email: event.target.value }))} /></label><label className="customer-address-field">Address<input required value={customerForm.address} onChange={(event) => setCustomerForm((current) => ({ ...current, address: event.target.value }))} /></label><label>State code<input required pattern="[0-9]{2}" title="Enter the two-digit GST state code" value={customerForm.stateCode} onChange={(event) => setCustomerForm((current) => ({ ...current, stateCode: event.target.value }))} /></label><label>GSTIN (optional)<input value={customerForm.gstin} onChange={(event) => setCustomerForm((current) => ({ ...current, gstin: event.target.value }))} /></label></div></div>{customerError && <p className="form-error" role="alert">{customerError}</p>}<div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsCustomerModalOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={isSavingCustomer}>{isSavingCustomer ? 'Saving…' : 'Save customer'}</button></div></form></div></div>}
     </div>
   )
 }

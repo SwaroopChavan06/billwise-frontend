@@ -45,6 +45,9 @@ products from `GET /api/v1/products`, and print-ready invoice HTML from
 `GET /api/v1/invoices/:id/print`. Use the invoice page's **Print / Save as PDF**
 button to save the formatted invoice as a PDF.
 
+The Customers section can create customers and open that customer's invoices.
+Invoice and order item quantities must be whole numbers.
+
 By default the frontend uses `http://localhost:3000`. To use another API
 origin, create `apps/web/.env.local`:
 
