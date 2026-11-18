@@ -103,7 +103,9 @@ declare global {
   }
 }
 
-const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+const apiUrl = import.meta.env.PROD
+  ? window.location.origin
+  : import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const getApiRequestError = (error: unknown, fallback: string) => {
   if (error instanceof TypeError && error.message === 'Failed to fetch') {

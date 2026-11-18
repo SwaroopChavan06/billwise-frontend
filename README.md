@@ -55,6 +55,13 @@ VITE_API_URL=http://localhost:3000
 VITE_GOOGLE_CLIENT_ID=your-google-oauth-client-id
 ```
 
+The Cloudflare Worker deployment serves the built Vite app and proxies `/api/*`
+requests to the Render API through the same origin. Do not set `VITE_API_URL`
+in Cloudflare's build variables; in production, the frontend uses its own
+origin so the browser sends the session cookie to the Worker. Keep
+`VITE_GOOGLE_CLIENT_ID` configured as a build variable. Set the API's
+`WEB_ORIGINS` to the exact Worker origin.
+
 Google sign-in requires the OAuth Web client ID configured on both the
 frontend and API. The API verifies credentials and authorizes only emails in
 its server-side `GOOGLE_ALLOWED_EMAILS` allowlist. The login cookie is
