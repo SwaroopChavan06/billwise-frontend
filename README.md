@@ -22,14 +22,13 @@ npm run lint
 
 The current interface is an operational billing dashboard focused on:
 
-- Outstanding invoices
-- Issued invoices
-- Low-stock alerts
+- Google login for allowlisted accounts
 - Recent invoices
 - Customers, products, inventory, and invoice navigation
+- Google account profile and logout
 
 Invoice creation, customer lookup, product lookup, invoice listing, and PDF
-downloads are connected to the backend API.
+downloads are connected to authenticated backend API routes.
 
 ## Backend API connection
 
@@ -53,7 +52,18 @@ origin, create `apps/web/.env.local`:
 
 ```text
 VITE_API_URL=http://localhost:3000
+VITE_GOOGLE_CLIENT_ID=your-google-oauth-client-id
 ```
+
+Google sign-in requires the OAuth Web client ID configured on both the
+frontend and API. The API verifies credentials and authorizes only emails in
+its server-side `GOOGLE_ALLOWED_EMAILS` allowlist. The login cookie is
+HTTP-only; the browser frontend does not store Google credentials.
+
+If Google sign-in shows that it cannot reach the billing API, start the API
+with `npm run start:dev` from `apps/api`. Confirm that `VITE_API_URL` points to
+that API and that the API's `WEB_ORIGINS` includes the frontend's exact browser
+origin, including its hostname and port.
 
 Start the backend and frontend in separate terminals:
 
