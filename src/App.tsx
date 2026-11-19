@@ -106,9 +106,6 @@ declare global {
 const apiUrl = import.meta.env.PROD
   ? window.location.origin
   : import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-const API_WAKE_RETRY_STATUSES = new Set([502, 503, 504])
-const API_WAKE_RETRY_LIMIT = 12
-const API_WAKE_RETRY_DELAY_MS = 5000
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const getApiRequestError = (error: unknown, fallback: string) => {
   if (error instanceof TypeError && error.message === 'Failed to fetch') {
@@ -140,7 +137,6 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking')
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authError, setAuthError] = useState('')
-  const [isWakingApi, setIsWakingApi] = useState(false)
   const [active, setActive] = useState('Overview')
   const [todayLabel] = useState(() => new Date().toLocaleDateString('en-IN', {
     weekday: 'long',
@@ -215,18 +211,10 @@ function App() {
     let active = true
     void (async () => {
       try {
-        let response: Response | null = null
-        for (let retry = 0; retry <= API_WAKE_RETRY_LIMIT; retry += 1) {
-          if (!active) return
-          response = await apiFetch('/api/v1/auth/session')
-          if (!API_WAKE_RETRY_STATUSES.has(response.status) || retry === API_WAKE_RETRY_LIMIT) break
-          setIsWakingApi(true)
-          await new Promise<void>((resolve) => window.setTimeout(resolve, API_WAKE_RETRY_DELAY_MS))
-        }
-        if (!active || !response) return
-        setIsWakingApi(false)
+        const response = await apiFetch('/api/v1/auth/session')
         if (!response.ok) throw new Error(`Could not check the login session. (${response.status})`)
         const session = await response.json() as { user: AuthUser | null }
+        if (!active) return
         if (!session.user) {
           setAuthStatus('unauthenticated')
           return
@@ -235,7 +223,6 @@ function App() {
         if (active) setAuthStatus('authenticated')
       } catch (error) {
         if (!active) return
-        setIsWakingApi(false)
         setAuthError(getApiRequestError(error, 'Could not check the login session.'))
         setAuthStatus('unauthenticated')
       }
@@ -702,7 +689,7 @@ function App() {
   }
 
   if (authStatus === 'checking') {
-    return <main className="auth-page"><section className="auth-card"><span className="brand-mark">B</span><h1>Billwise</h1><p>{isWakingApi ? 'Waking the billing service… This may take up to a minute.' : 'Checking your sign-in…'}</p></section></main>
+    return <main className="auth-page"><section className="auth-card"><span className="brand-mark">B</span><h1>Billwise</h1><p>Checking your sign-in…</p></section></main>
   }
 
   if (authStatus === 'unauthenticated') {

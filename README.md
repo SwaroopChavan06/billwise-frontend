@@ -62,11 +62,6 @@ origin so the browser sends the session cookie to the Worker. Keep
 `VITE_GOOGLE_CLIENT_ID` configured as a build variable. Set the API's
 `WEB_ORIGINS` to the exact Worker origin.
 
-Render Free web services spin down after 15 minutes without traffic and can
-take about a minute to wake. The initial session check retries transient
-502/503/504 responses for up to 60 seconds. Since API sessions are kept in
-memory, users may need to sign in again after the service wakes.
-
 Google sign-in requires the OAuth Web client ID configured on both the
 frontend and API. The API verifies credentials and authorizes only emails in
 its server-side `GOOGLE_ALLOWED_EMAILS` allowlist. The login cookie is
